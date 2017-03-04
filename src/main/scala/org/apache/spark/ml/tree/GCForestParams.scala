@@ -62,14 +62,14 @@ private[ml] trait GCForestParams extends HasSeed with HasTreeNumCol {
   def setDataSize(value: Array[Int]): this.type = set(dataSize, value)
   def getDataSize = $(dataSize)
 
-  final val instanceId: Param[String] = new Param[String](this, "instanceId", "instanceId column name")
+  final val instanceCol: Param[String] = new Param[String](this, "instanceCol", "instanceId column name")
+  setDefault(instanceCol -> "instance")
 
-  setDefault(instanceId, "instance_id")
-  def getInstanceId: String = $(instanceId)
+  final val windowCol: Param[String] = new Param[String](this, "windowCol", "windowId column name")
+  setDefault(windowCol -> "window")
 
-  final val windowId: Param[String] = new Param[String](this, "windowId", "windowId column name")
-  setDefault(windowId, "window_id")
-  def getWindowId: String = $(windowId)
+  final val scanCol: Param[String] = new Param[String](this, "scanCol", "scanId column name")
+  setDefault(scanCol -> "scan_id")
 
   def setSeed(value: Long): this.type = set(seed, value)
 }

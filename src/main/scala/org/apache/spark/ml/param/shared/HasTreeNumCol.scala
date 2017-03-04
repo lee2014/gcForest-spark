@@ -11,7 +11,7 @@ private[ml] trait HasTreeNumCol extends Params {
   setDefault(treeNumCol, "treeNum")
 
   /** @group getParam */
-  final def getFeaturesCol: String = $(treeNumCol)
+  final def getTreeNumCol: String = $(treeNumCol)
 }
 
 
