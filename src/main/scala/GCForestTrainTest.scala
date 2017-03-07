@@ -1,8 +1,8 @@
 import org.apache.spark.ml.classification.GCForestClassifier
 import org.apache.spark.ml.linalg.DenseVector
-import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{ArrayType, DoubleType, StructField, StructType}
+import org.apache.spark.sql.{Row, SparkSession}
 
 /**
   * Created by chengli on 3/7/17.
