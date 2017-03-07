@@ -38,27 +38,28 @@ class GCForestClassifier(override val uid: String)
       new DenseMatrix(w, h, features.toArray)
     }
 
-    val windowInstances = dataset.withColumn($(featuresCol), vector2Matrix(col($(featuresCol))))
+    val windowInstances = dataset.withColumn($(featuresCol), vector2Matrix(col($(featuresCol)), lit(width), lit(height)))
       .rdd.zipWithIndex.flatMap {
         case (row, index) =>
-          val rows = ArrayBuffer[Row]()
+          val rows = Array.fill[Row]((width - windowWidth + 1) * (height - windowHeight + 1))(null)
           val featureIdx = row.fieldIndex($(featuresCol))
           val matrix = row.getAs[DenseMatrix]($(featuresCol))
 
           // TODO should be optimized
           Range(0, width - windowWidth + 1).foreach { x_offset =>
             Range(0, height - windowHeight + 1).foreach { y_offset =>
-              val features = Array.fill[Double](windowWidth * windowHeight)(0)
+              val features = Array.fill[Double](windowWidth * windowHeight)(0d)
+              val newRow = ArrayBuffer[Any]() ++= row.toSeq
               Range(0, windowWidth).foreach { x =>
                 Range(0, windowHeight).foreach { y =>
-                  features(x * windowWidth + y * windowHeight) = matrix(x + x_offset, y + y_offset)
-                  val newRow = ArrayBuffer[Any]() += row.toSeq
-                  newRow(featureIdx) = new DenseVector(features)
-                  newRow += (x_offset * (width - windowWidth + 1) + y_offset * (height - windowHeight + 1)).toLong
-                  newRow += index
-                  rows += Row.fromSeq(newRow)
+                  features(x * windowWidth + y) = matrix(x + x_offset, y + y_offset)
                 }
               }
+              val windowNum = x_offset * (width - windowWidth + 1) + y_offset
+              newRow.update(featureIdx, new DenseVector(features))
+              newRow += windowNum.toLong
+              newRow += index
+              rows(windowNum) = Row.fromSeq(newRow)
             }
           }
           rows
@@ -71,8 +72,7 @@ class GCForestClassifier(override val uid: String)
     sparkSession.createDataFrame(windowInstances, newSchema)
   }
 
-  def featureTransform(dataset: Dataset[_], rfc: RandomForestClassifier)
-  : (DataFrame, RandomForestClassificationModel) = {
+  def featureTransform(dataset: Dataset[_], rfc: RandomForestCART): (DataFrame, RandomForestCARTModel) = {
     val schema = dataset.schema
     val sparkSession = dataset.sparkSession
     var out: DataFrame = null
@@ -95,9 +95,9 @@ class GCForestClassifier(override val uid: String)
   def genRFClassifier(rfType: String,
                           treeNum: Int,
                           minInstancePerNode: Int
-                         ): RandomForestClassifier = {
+                         ): RandomForestCART = {
     val rf = rfType match {
-      case "rf" => new RandomForestClassifier()
+      case "rf" => new RandomForestCART()
       case "crtf" => new CompleteRandomTreeForestClassifier()
     }
 
@@ -194,7 +194,7 @@ class GCForestClassifier(override val uid: String)
     val numClasses: Int = getNumClasses(dataset)
     var scanFeature: DataFrame = null
     val mgsModels = ArrayBuffer[MultiGrainedScanModel]()
-    val erfModels = ArrayBuffer[Array[RandomForestClassificationModel]]()
+    val erfModels = ArrayBuffer[Array[RandomForestCARTModel]]()
 
     /**
       *  Multi-Grained Scanning
@@ -205,7 +205,7 @@ class GCForestClassifier(override val uid: String)
       val scanFeatures = ArrayBuffer[Dataset[_]]()
 
       Range(0, $(multiScanWindow).length / 2).foreach { i =>
-        val (w, h) = (i, i+1)
+        val (w, h) = ($(multiScanWindow)(i), $(multiScanWindow)(i+1))
         val windowInstances = extractMatrixRDD(dataset, w, h)
 
         val rf = genRFClassifier("rf", $(scanForestTreeNum), $(scanForestMinInstancesPerNode))
@@ -237,7 +237,7 @@ class GCForestClassifier(override val uid: String)
     var lastPrediction: DataFrame = null
 
     Range(0, $(cascadeForestMaxIteration)).foreach { it =>
-      val ensembleRandomForest = Array[RandomForestClassifier](
+      val ensembleRandomForest = Array[RandomForestCART](
         genRFClassifier("rf", $(cascadeForestTreeNum), $(cascadeForestMinInstancesPerNode)),
         genRFClassifier("rf", $(cascadeForestTreeNum), $(cascadeForestMinInstancesPerNode)),
         genRFClassifier("crtf", $(cascadeForestTreeNum), $(cascadeForestMinInstancesPerNode)),
@@ -285,14 +285,14 @@ class GCForestClassifier(override val uid: String)
 
 class GCForestClassificationModel private[ml] ( override val uid: String,
                                                 private val scanModel: Array[MultiGrainedScanModel],
-                                                private val cascadeForest: Array[Array[RandomForestClassificationModel]],
+                                                private val cascadeForest: Array[Array[RandomForestCARTModel]],
                                                 override val numClasses: Int)
   extends ProbabilisticClassificationModel[Vector, GCForestClassificationModel]
     with GCForestParams with MLWritable with Serializable {
 
   def this(
     scanModel: Array[MultiGrainedScanModel],
-    cascadeForest: Array[Array[RandomForestClassificationModel]],
+    cascadeForest: Array[Array[RandomForestCARTModel]],
     numClasses: Int) =
     this(Identifiable.randomUID("gcfc"), scanModel, cascadeForest, numClasses)
 
@@ -454,9 +454,9 @@ object GCForestClassificationModel extends MLReadable[GCForestClassificationMode
         val windowWidth = (scanMetadata.metadata \ "windowWidth").extract[Int]
         val windowHeight = (scanMetadata.metadata \ "windowHeight").extract[Int]
         val rfPath = new Path(modelPath, "rf").toString
-        val rfModel = RandomForestClassificationModel.load(rfPath)
+        val rfModel = RandomForestCARTModel.load(rfPath)
         val crtfPath = new Path(modelPath, "crtf").toString
-        val crtfModel = RandomForestClassificationModel.load(crtfPath)
+        val crtfModel = RandomForestCARTModel.load(crtfPath)
         new MultiGrainedScanModel(windowWidth, windowHeight, rfModel, crtfModel)
       }.toArray
 
@@ -465,7 +465,7 @@ object GCForestClassificationModel extends MLReadable[GCForestClassificationMode
         val modelsPath = new Path(cascadePath, level.toString).toString
         Range(0, 4).map { index =>
           val modelPath = new Path(modelsPath, index.toString).toString
-          RandomForestClassificationModel.load(modelPath)
+          RandomForestCARTModel.load(modelPath)
         }.toArray
       }.toArray
 
@@ -479,12 +479,12 @@ object GCForestClassificationModel extends MLReadable[GCForestClassificationMode
 
 class MultiGrainedScanModel( override val uid: String,
                              val windowWidth: Int, val windowHeight: Int,
-                             val rfModel: RandomForestClassificationModel,
-                             val crtfModel: RandomForestClassificationModel) extends Params {
+                             val rfModel: RandomForestCARTModel,
+                             val crtfModel: RandomForestCARTModel) extends Params {
   def this(
             windowWidth: Int, windowHeight: Int,
-            rfModel: RandomForestClassificationModel,
-            crtfModel: RandomForestClassificationModel) =
+            rfModel: RandomForestCARTModel,
+            crtfModel: RandomForestCARTModel) =
     this(Identifiable.randomUID("mgs"), windowWidth, windowHeight, rfModel, crtfModel)
 
   override def copy(extra: ParamMap): Params =

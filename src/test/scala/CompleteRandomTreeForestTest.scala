@@ -1,5 +1,5 @@
 import org.apache.spark.ml.Pipeline
-import org.apache.spark.ml.classification.{CompleteRandomTreeForestClassifier, RandomForestClassificationModel, RandomForestClassifier}
+import org.apache.spark.ml.classification.{CompleteRandomTreeForestClassifier, RandomForestCARTModel, RandomForestClassificationModel, RandomForestClassifier}
 import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
 import org.apache.spark.ml.feature.{IndexToString, StringIndexer, VectorIndexer}
 
@@ -60,7 +60,7 @@ class CompleteRandomTreeForestTest extends SparkUnitTest {
     val accuracy = evaluator.evaluate(predictions)
     println("Test Error = " + (1.0 - accuracy))
 
-    val rfModel = model.stages(2).asInstanceOf[RandomForestClassificationModel]
+    val rfModel = model.stages(2).asInstanceOf[RandomForestCARTModel]
     println("Learned classification forest model:\n" + rfModel.toDebugString)
   }
 
@@ -118,6 +118,6 @@ class CompleteRandomTreeForestTest extends SparkUnitTest {
     println("Test Error = " + (1.0 - accuracy))
 
     val rfModel = model.stages(2).asInstanceOf[RandomForestClassificationModel]
-    println("Learned classification forest model:\n" + rfModel.toDebugString)
+    // println("Learned classification forest model:\n" + rfModel.toDebugString)
   }
 }
