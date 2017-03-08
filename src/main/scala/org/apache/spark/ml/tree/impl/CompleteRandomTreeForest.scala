@@ -779,7 +779,7 @@ private [spark] object CompleteRandomTreeForest extends Logging {
     }
 
     val random_index = allRand.nextInt(featureSplitsAndImpurityStats.length)
-    val (randomSplit, randomSplitStats) =featureSplitsAndImpurityStats(random_index)
+    val (randomSplit, randomSplitStats) = featureSplitsAndImpurityStats(random_index)
     (randomSplit, randomSplitStats)
   }
 

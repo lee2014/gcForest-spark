@@ -7,7 +7,7 @@ import org.apache.spark.sql.{Row, SparkSession}
 /**
   * Created by chengli on 3/7/17.
   */
-object GCForestTrainTest {
+object GCForestTrain {
   def main(args: Array[String]): Unit = {
     var input = ""
     var output = ""
@@ -21,7 +21,7 @@ object GCForestTrainTest {
 
     val spark = SparkSession.builder().appName(this.getClass.getSimpleName).getOrCreate()
 
-    val raw = spark.read.text(output)
+    val raw = spark.read.text(input)
 
     val trainRDD = raw.rdd.map { row =>
       val data = row.getString(0).split(",")
