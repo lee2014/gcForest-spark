@@ -44,19 +44,19 @@ class GCForestClassifier(override val uid: String)
           val rows = Array.fill[Row]((width - windowWidth + 1) * (height - windowHeight + 1))(null)
           val featureIdx = row.fieldIndex($(featuresCol))
           val matrix = row.getAs[DenseMatrix]($(featuresCol))
+          val features = Array.fill[Double](windowWidth * windowHeight)(0d)
+          val newRow = ArrayBuffer[Any]() ++= row.toSeq
 
           // TODO should be optimized
           Range(0, width - windowWidth + 1).foreach { x_offset =>
             Range(0, height - windowHeight + 1).foreach { y_offset =>
-              val features = Array.fill[Double](windowWidth * windowHeight)(0d)
-              val newRow = ArrayBuffer[Any]() ++= row.toSeq
               Range(0, windowWidth).foreach { x =>
                 Range(0, windowHeight).foreach { y =>
                   features(x * windowWidth + y) = matrix(x + x_offset, y + y_offset)
                 }
               }
               val windowNum = x_offset * (width - windowWidth + 1) + y_offset
-              newRow.update(featureIdx, new DenseVector(features))
+              newRow(featureIdx) = new DenseVector(features)
               newRow += windowNum.toLong
               newRow += index
               rows(windowNum) = Row.fromSeq(newRow)
