@@ -23,6 +23,13 @@ class GCForestClassifier(override val uid: String)
 
   def this() = this(Identifiable.randomUID("gcf"))
 
+  /**
+    * Scan image-style data
+    * @param dataset raw input features
+    * @param windowWidth the width of window
+    * @param windowHeight the height of window
+    * @return
+    */
   def extractMatrixRDD(dataset: Dataset[_], windowWidth: Int, windowHeight: Int): DataFrame = {
     require(getDataSize.length == 2, "You must set Image resolution by setDataSize")
     val sparkSession = dataset.sparkSession
@@ -47,7 +54,6 @@ class GCForestClassifier(override val uid: String)
           val features = Array.fill[Double](windowWidth * windowHeight)(0d)
           val newRow = ArrayBuffer[Any]() ++= row.toSeq
 
-          // TODO should be optimized
           Range(0, width - windowWidth + 1).foreach { x_offset =>
             Range(0, height - windowHeight + 1).foreach { y_offset =>
               Range(0, windowWidth).foreach { x =>
@@ -72,11 +78,18 @@ class GCForestClassifier(override val uid: String)
     sparkSession.createDataFrame(windowInstances, newSchema)
   }
 
+  /**
+    * Use cross-validation to build k classes distribution features
+    * @param dataset window features
+    * @param rfc random forest classifier
+    * @return k classes distribution features and random forest model
+    */
   def featureTransform(dataset: Dataset[_], rfc: RandomForestCART): (DataFrame, RandomForestCARTModel) = {
     val schema = dataset.schema
     val sparkSession = dataset.sparkSession
     var out: DataFrame = null
 
+    // cross-validation for k classes distribution features
     val splits = MLUtils.kFold(dataset.toDF.rdd, $(numFolds), $(seed))
     splits.zipWithIndex.foreach { case ((training, validation), splitIndex) =>
       val trainingDataset = sparkSession.createDataFrame(training, schema).cache
@@ -92,6 +105,7 @@ class GCForestClassifier(override val uid: String)
     (out, rfc.fit(dataset))
   }
 
+  // create a random forest classifier by type
   def genRFClassifier(rfType: String,
                           treeNum: Int,
                           minInstancePerNode: Int
@@ -108,17 +122,23 @@ class GCForestClassifier(override val uid: String)
       .setFeatureSubsetStrategy("sqrt")
   }
 
+  /**
+    * Concate multi-scan features
+    * @param dataset one of a window
+    * @param sets the others
+    * @return input for Cascade Forest
+    */
   def concatenate(dataset: Dataset[_], sets: Dataset[_]*): DataFrame = {
     val sparkSession = dataset.sparkSession
     var unionSet = dataset.toDF
     sets.foreach(ds => unionSet = unionSet.union(ds.toDF))
 
-    class Record(val instance: Long,
-                 val label: Double,
-                 val features: Vector,
-                 val scanId: Int,
-                 val treeNum: Int,
-                 val winId: Long)
+    class Record(val instance: Long,    // instance id
+                 val label: Double,     // label
+                 val features: Vector,  // features
+                 val scanId: Int,       // the scan id for multi-scan
+                 val treeNum: Int,      // tree id
+                 val winId: Long)       // window id
 
     val concatData = unionSet.select(
       $(instanceCol), $(labelCol),
@@ -159,6 +179,7 @@ class GCForestClassifier(override val uid: String)
     sparkSession.createDataFrame(concatData, schema)
   }
 
+  /*
   def concatPredict(dataset: Dataset[_]): DataFrame = {
     val sparkSession = dataset.sparkSession
     val schema = new StructType()
@@ -176,18 +197,29 @@ class GCForestClassifier(override val uid: String)
     }
     sparkSession.createDataFrame(predictionRDD, schema)
   }
+  */
 
+  /**
+    * concat inputs of Cascade Forest with prediction
+    * @param feature input features
+    * @param predict prediction features
+    * @return
+    */
   def mergeFeatureAndPredict(feature: Dataset[_], predict: Dataset[_]): DataFrame = {
     val vectorMerge = udf { (v1: Vector, v2: Vector) =>
       new DenseVector(v1.toArray.union(v2.toArray))
     }
 
-    feature.join(
-      predict.withColumnRenamed($(featuresCol), $(predictionCol)),
-      Seq($(instanceCol))
-    ).withColumn(
-      $(featuresCol), vectorMerge(col($(featuresCol)), col($(predictionCol)))
-    ).select($(instanceCol), $(featuresCol), $(labelCol))
+    if (predict != null) {
+      feature.join(
+        predict.withColumnRenamed($(featuresCol), $(predictionCol)),
+        Seq($(instanceCol))
+      ).withColumn(
+        $(featuresCol), vectorMerge(col($(featuresCol)), col($(predictionCol)))
+      ).select($(instanceCol), $(featuresCol), $(labelCol)).toDF
+    } else {
+      feature.toDF
+    }
   }
 
   override protected def train(dataset: Dataset[_]): GCForestClassificationModel = {
@@ -200,11 +232,13 @@ class GCForestClassifier(override val uid: String)
       *  Multi-Grained Scanning
       */
     if ($(dataStyle) == "image") {
-      require($(multiScanWindow).length % 2 == 0) // TODO comment
+      require($(multiScanWindow).length % 2 == 0,
+        "The multiScanWindow must has the even number for image-style data")
 
       val scanFeatures = ArrayBuffer[Dataset[_]]()
 
       Range(0, $(multiScanWindow).length / 2).foreach { i =>
+        // Get the size of scan window
         val (w, h) = ($(multiScanWindow)(i), $(multiScanWindow)(i+1))
         val windowInstances = extractMatrixRDD(dataset, w, h)
 
@@ -222,7 +256,6 @@ class GCForestClassifier(override val uid: String)
       }
 
       scanFeature = concatenate(scanFeatures.head, scanFeatures.tail:_*).cache
-
     } else if ($(dataStyle) == "sequence") { // TODO
       throw new UnsupportedOperationException("Unsupported sequence data rightly!")
     } else {
@@ -236,6 +269,7 @@ class GCForestClassifier(override val uid: String)
     val sparkSession = scanFeature.sparkSession
     var lastPrediction: DataFrame = null
 
+    // Init classifiers
     Range(0, $(cascadeForestMaxIteration)).foreach { it =>
       val ensembleRandomForest = Array[RandomForestCART](
         genRFClassifier("rf", $(cascadeForestTreeNum), $(cascadeForestMinInstancesPerNode)),
@@ -250,29 +284,31 @@ class GCForestClassifier(override val uid: String)
       val models = ensembleRandomForest.map(classifier => classifier.fit(growingSet))
       erfModels += models
 
-      var ensemblePredict: DataFrame = null
-      ensembleRandomForest.indices.foreach { it =>
-        val predict = featureTransform(training, ensembleRandomForest(it))._1
-          .withColumn($(treeNumCol), lit(it))
-          .select($(instanceCol), $(featuresCol), $(treeNumCol))
+      if (it < $(cascadeForestMaxIteration) - 1) {
+        var ensemblePredict: DataFrame = null
+        ensembleRandomForest.indices.foreach { it =>
+          val predict = featureTransform(training, ensembleRandomForest(it))._1
+            .withColumn($(treeNumCol), lit(it))
+            .select($(instanceCol), $(featuresCol), $(treeNumCol))
 
-        ensemblePredict = if (ensemblePredict == null) predict else ensemblePredict.toDF.union(predict)
+          ensemblePredict = if (ensemblePredict == null) predict else ensemblePredict.toDF.union(predict)
+        }
+
+        val schema = new StructType()
+          .add(StructField($(instanceCol), LongType))
+          .add(StructField($(featuresCol), new VectorUDT))
+
+        val predictionRDD = ensemblePredict.rdd.groupBy(_.getAs[Long]($(instanceCol))).map { group =>
+          val instanceId = group._1
+          val rows = group._2
+
+          val features = new DenseVector(rows.toArray
+            .sortWith(_.getAs[Int]($(treeNumCol)) < _.getAs[Int]($(treeNumCol)))
+            .flatMap(_.getAs[Vector]($(featuresCol)).toArray))
+          Row.fromSeq(Array[Any](instanceId, features))
+        }
+        lastPrediction = sparkSession.createDataFrame(predictionRDD, schema)
       }
-
-      val schema = new StructType()
-        .add(StructField($(instanceCol), LongType))
-        .add(StructField($(featuresCol), new VectorUDT))
-
-      val predictionRDD = ensemblePredict.rdd.groupBy(_.getAs[Long]($(instanceCol))).map { group =>
-        val instanceId = group._1
-        val rows = group._2
-
-        val features = new DenseVector(rows.toArray
-          .sortWith(_.getAs[Int]($(treeNumCol)) < _.getAs[Int]($(treeNumCol)))
-          .flatMap(_.getAs[Vector]($(featuresCol)).toArray))
-        Row.fromSeq(Array[Any](instanceId, features))
-      }
-      lastPrediction = sparkSession.createDataFrame(predictionRDD, schema)
     }
 
     scanFeature.unpersist
@@ -333,14 +369,14 @@ class GCForestClassificationModel private[ml] ( override val uid: String,
       scanModel.foreach { model =>
         val windowWidth = model.windowWidth
         val windowHeight = model.windowHeight
+        val windowFeatures = Array.fill[Double](windowWidth * windowHeight)(0)
 
-        Array(model.rfModel, model.crtfModel).foreach { featureModel =>
+        Seq(model.rfModel, model.crtfModel).foreach { featureModel =>
           Range(0, width - windowWidth + 1).foreach { x_offset =>
             Range(0, height - windowHeight + 1).foreach { y_offset =>
-              val windowFeatures = Array.fill[Double](windowWidth * windowHeight)(0)
               Range(0, windowWidth).foreach { x =>
                 Range(0, windowHeight).foreach { y =>
-                  windowFeatures(x * windowWidth + y * windowHeight) = matrix(x + x_offset, y + y_offset)
+                  windowFeatures(x * windowWidth + y) = matrix(x + x_offset, y + y_offset)
                 }
               }
               scanFeatures ++= featureModel.predictProbability(new DenseVector(windowFeatures)).toArray
@@ -387,6 +423,27 @@ class GCForestClassificationModel private[ml] ( override val uid: String,
     new GCForestClassificationModel.GCForestClassificationModelWriter(this)
 }
 
+/**
+  * The metadata of GCForestClassificationModel
+  *
+  * root                  // the root directory of GCForestClassificationModel
+  *  |--metadata          // metadata of GCForestClassificationModel
+  *  |--scan              // Multi-Grained Scanning
+  *  |   |--0
+  *  |   |  |--metadata
+  *  |   |  |--rf
+  *  |   |  |--crtf
+  *  |   |--1
+  *  |   |--2
+  *  |--cascade           // Cascade Forest
+  *  |   |--0             // the level of Cascade Forest
+  *  |   |  |--0          // the number of Forest
+  *  |   |  |--1
+  *  |   |  |--2
+  *  |   |  |--3
+  *  |   |--1
+  *  |   |--2
+  */
 object GCForestClassificationModel extends MLReadable[GCForestClassificationModel] {
   override def read: MLReader[GCForestClassificationModel] = new GCForestClassificationModelReader
 
@@ -437,7 +494,6 @@ object GCForestClassificationModel extends MLReadable[GCForestClassificationMode
     /** Checked against metadata when loading model */
     private val className = classOf[GCForestClassificationModel].getName
     val mgsClassName = classOf[MultiGrainedScanModel].getName
-    // private val treeClassName = classOf[DecisionTreeClassificationModel].getName
 
     override def load(path: String): GCForestClassificationModel = {
       implicit val format = DefaultFormats
