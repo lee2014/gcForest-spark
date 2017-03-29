@@ -262,7 +262,7 @@ object RandomTreeForestModel extends MLReadable[RandomTreeForestModel] {
   @Since("2.0.0")
   override def load(path: String): RandomTreeForestModel = super.load(path)
 
-  private[RandomTreeForestModel$]
+  private[RandomTreeForestModel]
   class RandomForestCARTModelWriter(instance: RandomTreeForestModel)
     extends MLWriter {
 
