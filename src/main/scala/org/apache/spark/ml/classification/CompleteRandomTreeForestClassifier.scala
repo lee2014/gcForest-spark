@@ -10,11 +10,11 @@ import org.apache.spark.sql.Dataset
 /**
   * Created by chengli on 3/3/17.
   */
-class CompleteRandomTreeForestClassifier(override val uid: String) extends RandomForestCART {
+class CompleteRandomTreeForestClassifier(override val uid: String) extends RandomTreeForest {
 
   def this() = this(Identifiable.randomUID("crtfc"))
 
-  override protected def train(dataset: Dataset[_]): RandomForestCARTModel = {
+  override protected def train(dataset: Dataset[_]): RandomTreeForestModel = {
     val categoricalFeatures: Map[Int, Int] =
       MetadataUtils.getCategoricalFeatures(dataset.schema($(featuresCol)))
     val numClasses: Int = getNumClasses(dataset)
@@ -37,7 +37,7 @@ class CompleteRandomTreeForestClassifier(override val uid: String) extends Rando
       .map(_.asInstanceOf[DecisionTreeClassificationModel])
 
     val numFeatures = oldDataset.first().features.size
-    val m = new RandomForestCARTModel(trees, numFeatures, numClasses)
+    val m = new RandomTreeForestModel(trees, numFeatures, numClasses)
     instr.logSuccess(m)
     m
   }

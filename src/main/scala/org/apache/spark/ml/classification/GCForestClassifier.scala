@@ -84,7 +84,7 @@ class GCForestClassifier(override val uid: String)
     * @param rfc random forest classifier
     * @return k classes distribution features and random forest model
     */
-  def featureTransform(dataset: Dataset[_], rfc: RandomForestCART): (DataFrame, RandomForestCARTModel) = {
+  def featureTransform(dataset: Dataset[_], rfc: RandomTreeForest): (DataFrame, RandomTreeForestModel) = {
     val schema = dataset.schema
     val sparkSession = dataset.sparkSession
     var out: DataFrame = null
@@ -109,9 +109,9 @@ class GCForestClassifier(override val uid: String)
   def genRFClassifier(rfType: String,
                           treeNum: Int,
                           minInstancePerNode: Int
-                         ): RandomForestCART = {
+                         ): RandomTreeForest = {
     val rf = rfType match {
-      case "rf" => new RandomForestCART()
+      case "rf" => new RandomTreeForest()
       case "crtf" => new CompleteRandomTreeForestClassifier()
     }
 
@@ -226,7 +226,7 @@ class GCForestClassifier(override val uid: String)
     val numClasses: Int = getNumClasses(dataset)
     var scanFeature: DataFrame = null
     val mgsModels = ArrayBuffer[MultiGrainedScanModel]()
-    val erfModels = ArrayBuffer[Array[RandomForestCARTModel]]()
+    val erfModels = ArrayBuffer[Array[RandomTreeForestModel]]()
 
     /**
       *  Multi-Grained Scanning
@@ -271,7 +271,7 @@ class GCForestClassifier(override val uid: String)
 
     // Init classifiers
     Range(0, $(cascadeForestMaxIteration)).foreach { it =>
-      val ensembleRandomForest = Array[RandomForestCART](
+      val ensembleRandomForest = Array[RandomTreeForest](
         genRFClassifier("rf", $(cascadeForestTreeNum), $(cascadeForestMinInstancesPerNode)),
         genRFClassifier("rf", $(cascadeForestTreeNum), $(cascadeForestMinInstancesPerNode)),
         genRFClassifier("crtf", $(cascadeForestTreeNum), $(cascadeForestMinInstancesPerNode)),
@@ -319,17 +319,17 @@ class GCForestClassifier(override val uid: String)
 }
 
 
-class GCForestClassificationModel private[ml] ( override val uid: String,
-                                                private val scanModel: Array[MultiGrainedScanModel],
-                                                private val cascadeForest: Array[Array[RandomForestCARTModel]],
-                                                override val numClasses: Int)
+class GCForestClassificationModel private[ml] (override val uid: String,
+                                               private val scanModel: Array[MultiGrainedScanModel],
+                                               private val cascadeForest: Array[Array[RandomTreeForestModel]],
+                                               override val numClasses: Int)
   extends ProbabilisticClassificationModel[Vector, GCForestClassificationModel]
     with GCForestParams with MLWritable with Serializable {
 
   def this(
-    scanModel: Array[MultiGrainedScanModel],
-    cascadeForest: Array[Array[RandomForestCARTModel]],
-    numClasses: Int) =
+            scanModel: Array[MultiGrainedScanModel],
+            cascadeForest: Array[Array[RandomTreeForestModel]],
+            numClasses: Int) =
     this(Identifiable.randomUID("gcfc"), scanModel, cascadeForest, numClasses)
 
   val numScans: Int = scanModel.length
@@ -401,7 +401,7 @@ class GCForestClassificationModel private[ml] ( override val uid: String,
       case dv: DenseVector =>
         ProbabilisticClassificationModel.normalizeToProbabilitiesInPlace(dv)
         dv
-      case sv: SparseVector =>
+      case _: SparseVector =>
         throw new RuntimeException("Unexpected error in GCForestClassificationModel:" +
           " raw2probabilityInPlace encountered SparseVector")
     }
@@ -493,7 +493,7 @@ object GCForestClassificationModel extends MLReadable[GCForestClassificationMode
 
     /** Checked against metadata when loading model */
     private val className = classOf[GCForestClassificationModel].getName
-    val mgsClassName = classOf[MultiGrainedScanModel].getName
+    val mgsClassName: String = classOf[MultiGrainedScanModel].getName
 
     override def load(path: String): GCForestClassificationModel = {
       implicit val format = DefaultFormats
@@ -510,9 +510,9 @@ object GCForestClassificationModel extends MLReadable[GCForestClassificationMode
         val windowWidth = (scanMetadata.metadata \ "windowWidth").extract[Int]
         val windowHeight = (scanMetadata.metadata \ "windowHeight").extract[Int]
         val rfPath = new Path(modelPath, "rf").toString
-        val rfModel = RandomForestCARTModel.load(rfPath)
+        val rfModel = RandomTreeForestModel.load(rfPath)
         val crtfPath = new Path(modelPath, "crtf").toString
-        val crtfModel = RandomForestCARTModel.load(crtfPath)
+        val crtfModel = RandomTreeForestModel.load(crtfPath)
         new MultiGrainedScanModel(windowWidth, windowHeight, rfModel, crtfModel)
       }.toArray
 
@@ -521,7 +521,7 @@ object GCForestClassificationModel extends MLReadable[GCForestClassificationMode
         val modelsPath = new Path(cascadePath, level.toString).toString
         Range(0, 4).map { index =>
           val modelPath = new Path(modelsPath, index.toString).toString
-          RandomForestCARTModel.load(modelPath)
+          RandomTreeForestModel.load(modelPath)
         }.toArray
       }.toArray
 
@@ -533,14 +533,14 @@ object GCForestClassificationModel extends MLReadable[GCForestClassificationMode
   }
 }
 
-class MultiGrainedScanModel( override val uid: String,
-                             val windowWidth: Int, val windowHeight: Int,
-                             val rfModel: RandomForestCARTModel,
-                             val crtfModel: RandomForestCARTModel) extends Params {
+class MultiGrainedScanModel(override val uid: String,
+                            val windowWidth: Int, val windowHeight: Int,
+                            val rfModel: RandomTreeForestModel,
+                            val crtfModel: RandomTreeForestModel) extends Params {
   def this(
             windowWidth: Int, windowHeight: Int,
-            rfModel: RandomForestCARTModel,
-            crtfModel: RandomForestCARTModel) =
+            rfModel: RandomTreeForestModel,
+            crtfModel: RandomTreeForestModel) =
     this(Identifiable.randomUID("mgs"), windowWidth, windowHeight, rfModel, crtfModel)
 
   override def copy(extra: ParamMap): Params =

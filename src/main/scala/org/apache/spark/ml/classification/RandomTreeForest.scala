@@ -20,8 +20,8 @@ import org.apache.spark.sql.functions._
 /**
   * Created by chengli on 3/7/17.
   */
-class RandomForestCART @Since("1.4.0") ( @Since("1.4.0") override val uid: String)
-  extends ProbabilisticClassifier[Vector, RandomForestCART, RandomForestCARTModel]
+class RandomTreeForest(override val uid: String)
+  extends ProbabilisticClassifier[Vector, RandomTreeForest, RandomTreeForestModel]
     with RandomForestClassifierParams with DefaultParamsWritable {
 
   @Since("1.4.0")
@@ -92,7 +92,7 @@ class RandomForestCART @Since("1.4.0") ( @Since("1.4.0") override val uid: Strin
   override def setFeatureSubsetStrategy(value: String): this.type =
   set(featureSubsetStrategy, value)
 
-  override protected def train(dataset: Dataset[_]): RandomForestCARTModel = {
+  override protected def train(dataset: Dataset[_]): RandomTreeForestModel = {
     val categoricalFeatures: Map[Int, Int] =
       MetadataUtils.getCategoricalFeatures(dataset.schema($(featuresCol)))
     val numClasses: Int = getNumClasses(dataset)
@@ -115,17 +115,17 @@ class RandomForestCART @Since("1.4.0") ( @Since("1.4.0") override val uid: Strin
       .map(_.asInstanceOf[DecisionTreeClassificationModel])
 
     val numFeatures = oldDataset.first().features.size
-    val m = new RandomForestCARTModel(trees, numFeatures, numClasses)
+    val m = new RandomTreeForestModel(trees, numFeatures, numClasses)
     instr.logSuccess(m)
     m
   }
 
   @Since("1.4.1")
-  override def copy(extra: ParamMap): RandomForestCART = defaultCopy(extra)
+  override def copy(extra: ParamMap): RandomTreeForest = defaultCopy(extra)
 }
 
 @Since("1.4.0")
-object RandomForestCART extends DefaultParamsReadable[RandomForestCART] {
+object RandomTreeForest extends DefaultParamsReadable[RandomTreeForest] {
   /** Accessor for supported impurity settings: entropy, gini */
   @Since("1.4.0")
   final val supportedImpurities: Array[String] = TreeClassifierParams.supportedImpurities
@@ -136,7 +136,7 @@ object RandomForestCART extends DefaultParamsReadable[RandomForestCART] {
   RandomForestParams.supportedFeatureSubsetStrategies
 
   @Since("2.0.0")
-  override def load(path: String): RandomForestCART = super.load(path)
+  override def load(path: String): RandomTreeForest = super.load(path)
 }
 
 /**
@@ -148,11 +148,11 @@ object RandomForestCART extends DefaultParamsReadable[RandomForestCART] {
   *                Warning: These have null parents.
   */
 @Since("1.4.0")
-class RandomForestCARTModel private[ml] (@Since("1.5.0") override val uid: String,
-                                         private val _trees: Array[DecisionTreeClassificationModel],
-                                         @Since("1.6.0") override val numFeatures: Int,
-                                         @Since("1.5.0") override val numClasses: Int)
-  extends ProbabilisticClassificationModel[Vector, RandomForestCARTModel]
+class RandomTreeForestModel private[ml](@Since("1.5.0") override val uid: String,
+                                        private val _trees: Array[DecisionTreeClassificationModel],
+                                        @Since("1.6.0") override val numFeatures: Int,
+                                        @Since("1.5.0") override val numClasses: Int)
+  extends ProbabilisticClassificationModel[Vector, RandomTreeForestModel]
     with RandomForestClassifierParams with TreeEnsembleModel[DecisionTreeClassificationModel]
     with MLWritable with Serializable {
 
@@ -212,15 +212,15 @@ class RandomForestCARTModel private[ml] (@Since("1.5.0") override val uid: Strin
       case dv: DenseVector =>
         ProbabilisticClassificationModel.normalizeToProbabilitiesInPlace(dv)
         dv
-      case sv: SparseVector =>
+      case _: SparseVector =>
         throw new RuntimeException("Unexpected error in RandomForestClassificationModel:" +
           " raw2probabilityInPlace encountered SparseVector")
     }
   }
 
   @Since("1.4.0")
-  override def copy(extra: ParamMap): RandomForestCARTModel = {
-    copyValues(new RandomForestCARTModel(uid, _trees, numFeatures, numClasses), extra)
+  override def copy(extra: ParamMap): RandomTreeForestModel = {
+    copyValues(new RandomTreeForestModel(uid, _trees, numFeatures, numClasses), extra)
       .setParent(parent)
   }
 
@@ -249,21 +249,21 @@ class RandomForestCARTModel private[ml] (@Since("1.5.0") override val uid: Strin
 
   @Since("2.0.0")
   override def write: MLWriter =
-    new RandomForestCARTModel.RandomForestCARTModelWriter(this)
+    new RandomTreeForestModel.RandomForestCARTModelWriter(this)
 }
 
 @Since("2.0.0")
-object RandomForestCARTModel extends MLReadable[RandomForestCARTModel] {
+object RandomTreeForestModel extends MLReadable[RandomTreeForestModel] {
 
   @Since("2.0.0")
-  override def read: MLReader[RandomForestCARTModel] =
+  override def read: MLReader[RandomTreeForestModel] =
     new RandomForestCARTModelReader
 
   @Since("2.0.0")
-  override def load(path: String): RandomForestCARTModel = super.load(path)
+  override def load(path: String): RandomTreeForestModel = super.load(path)
 
-  private[RandomForestCARTModel]
-  class RandomForestCARTModelWriter(instance: RandomForestCARTModel)
+  private[RandomTreeForestModel$]
+  class RandomForestCARTModelWriter(instance: RandomTreeForestModel)
     extends MLWriter {
 
     override protected def saveImpl(path: String): Unit = {
@@ -277,13 +277,13 @@ object RandomForestCARTModel extends MLReadable[RandomForestCARTModel] {
   }
 
   private class RandomForestCARTModelReader
-    extends MLReader[RandomForestCARTModel] {
+    extends MLReader[RandomTreeForestModel] {
 
     /** Checked against metadata when loading model */
-    private val className = classOf[RandomForestCARTModel].getName
-    private val treeClassName = classOf[RandomForestCARTModel].getName
+    private val className = classOf[RandomTreeForestModel].getName
+    private val treeClassName = classOf[RandomTreeForestModel].getName
 
-    override def load(path: String): RandomForestCARTModel = {
+    override def load(path: String): RandomTreeForestModel = {
       implicit val format = DefaultFormats
       val (metadata: Metadata, treesData: Array[(Metadata, Node)], _) =
         EnsembleModelReadWrite.loadImpl(path, sparkSession, className, treeClassName)
@@ -301,7 +301,7 @@ object RandomForestCARTModel extends MLReadable[RandomForestCARTModel] {
       require(numTrees == trees.length, s"RandomForestClassificationModel.load expected $numTrees" +
         s" trees based on metadata but found ${trees.length} trees.")
 
-      val model = new RandomForestCARTModel(metadata.uid, trees, numFeatures, numClasses)
+      val model = new RandomTreeForestModel(metadata.uid, trees, numFeatures, numClasses)
       DefaultParamsReader.getAndSetParams(model, metadata)
       model
     }
@@ -310,10 +310,10 @@ object RandomForestCARTModel extends MLReadable[RandomForestCARTModel] {
   /** Convert a model from the old API */
   private[ml] def fromOld(
                            oldModel: OldRandomForestModel,
-                           parent: RandomForestCART,
+                           parent: RandomTreeForest,
                            categoricalFeatures: Map[Int, Int],
                            numClasses: Int,
-                           numFeatures: Int = -1): RandomForestCARTModel = {
+                           numFeatures: Int = -1): RandomTreeForestModel = {
     require(oldModel.algo == OldAlgo.Classification, "Cannot convert RandomForestModel" +
       s" with algo=${oldModel.algo} (old API) to RandomForestClassificationModel (new API).")
     val newTrees = oldModel.trees.map { tree =>
@@ -321,6 +321,6 @@ object RandomForestCARTModel extends MLReadable[RandomForestCARTModel] {
       DecisionTreeClassificationModel.fromOld(tree, null, categoricalFeatures)
     }
     val uid = if (parent != null) parent.uid else Identifiable.randomUID("rfc")
-    new RandomForestCARTModel(uid, newTrees, numFeatures, numClasses)
+    new RandomTreeForestModel(uid, newTrees, numFeatures, numClasses)
   }
 }
